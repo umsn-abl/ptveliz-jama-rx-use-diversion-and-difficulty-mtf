@@ -12,7 +12,7 @@ This code combines several public-use datasets (2009-2022) from the Monitoring t
 
 ## doi
 
-Please refer to the following link for the acommpanying manuscript: [https://doi.org/10.1001/jama.2024.12030](https://doi.org/10.1001/jama.2024.12030)
+Please refer to the following link for the accompanying manuscript: [https://doi.org/10.1001/jama.2024.12030](https://doi.org/10.1001/jama.2024.12030)
 
 ## data
 
