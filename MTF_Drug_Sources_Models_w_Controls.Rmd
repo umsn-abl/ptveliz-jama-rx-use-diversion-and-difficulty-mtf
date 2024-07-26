@@ -1,0 +1,224 @@
+---
+title: "MTF Drug Sources Models (w/ Controls for Linear Trends)"
+subtitle: "Grade 12: 2009-2022"
+author: "John Jardine"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cosmo
+    toc: TRUE
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 100% !important;
+  margin: auto;
+}
+</style>
+
+# Setup
+
+```{r setup, echo = TRUE, message = FALSE, warning = FALSE}
+# haven for reading stata files
+# tidyverse for data manipulation
+# sandwich for standard errors and lmtest for confidence intervals of ORs
+# survey for prevalence point estimates and confidence intervals
+# knitr and kableExtra for table generation
+if(!("pacman" %in% rownames(installed.packages()))) {install.packages("pacman")}
+library(pacman)
+p_load(r_lang, haven, tidyverse, sandwich, lmtest, survey, knitr, kableExtra)
+
+# read in the datasets created by "MTF_Drug_Sources.Rmd"
+form_1 = read_dta("C:/Users/jjardine/Desktop/MTF/MTF_Drug_Sources/code/form_1_2009_2022.dta")
+form_2 = read_dta("C:/Users/jjardine/Desktop/MTF/MTF_Drug_Sources/code/form_2_2009_2022.dta")
+
+# function to replicate standard errors from stata
+# source: https://stackoverflow.com/a/27368468
+sandwich1 <- function(object, ...) sandwich(object) * nobs(object) / (nobs(object) - 1)
+```
+
+# Descriptive
+
+```{r descriptive, echo = TRUE, message = FALSE, warning = FALSE}
+# weighted demographics
+form_1 %>% count(r_sex_b, wt = sampling_weight) %>% filter(!is.na(r_sex_b)) %>% mutate(n = n / sum(n) * 100)
+form_1 %>% count(r_race_4, wt = sampling_weight) %>% mutate(n = n / sum(n) * 100)
+form_1 %>% count(schl_rgn_4, wt = sampling_weight) %>% mutate(n = n / sum(n) * 100)
+form_1 %>% count(pop_dens, wt = sampling_weight) %>% mutate(n = n / sum(n) * 100)
+form_1 %>% count(college_grad_b, wt = sampling_weight) %>% filter(!is.na(college_grad_b)) %>% mutate(n = n / sum(n) * 100)
+
+# weighted percentages of number of classes of prescription drugs misused in past year (among users of >= 1 drug class)
+form_1 %>%
+  count(rowSums(across(c(amph_last12m_b, trql_last12m_b, narc_last12m_b)), na.rm = TRUE), wt = sampling_weight) %>%
+  filter(`rowSums(...)` != 0) %>%
+  group_by(as.numeric(`rowSums(...)` >= 2)) %>%
+  summarize(n = sum(n)) %>%
+  mutate(n = sprintf("%.3f", n / sum(n) * 100))
+
+# weighted percentages of number of classes of prescription drugs misused in past year (among users of >= 1 drug class)
+form_2 %>%
+  count(rowSums(across(c(amph_last12m_b, trql_last12m_b, narc_last12m_b)), na.rm = TRUE), wt = sampling_weight) %>%
+  filter(`rowSums(...)` != 0) %>%
+  group_by(as.numeric(`rowSums(...)` >= 2)) %>%
+  summarize(n = sum(n)) %>%
+  mutate(n = sprintf("%.3f", n / sum(n) * 100))
+```
+
+# Table 1
+
+```{r modeling1, echo = TRUE, message = FALSE, warning = FALSE, results = "asis"}
+# get the results for each row of the table (one variable)
+rowGen = function(.x) {
+  # select the appropriate dataset based on the variable
+  dat = if(.x %in% names(form_1)) {form_1} else {form_2}
+  # rename the variable of interest for use in the "svyby" function
+  dat = dat %>% rename(myvar = !!sym(.x))
+  
+  # create the survey design object
+  des = svydesign(ids = ~1,
+                  data = dat,
+                  weights = ~sampling_weight)
+  # get the point estimate and confidence interval for prevalence for
+  # each year group
+  mat = svyby(~myvar, ~year_group, des, svyciprop, vartype = "ci", na.rm = TRUE, na.rm.all = TRUE)
+
+  # get the counts of positive cases for each year group
+  n_s = c(dat %>% filter(year_group == 0 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 1 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 2 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 3 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 4 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 5 & myvar == 1) %>% nrow(),
+          dat %>% filter(year_group == 6 & myvar == 1) %>% nrow())
+  
+  # create a two-row matrix of the point estimates and confidence intervals where the format
+  # is the following for each year group:
+  #     n (xx.xx)
+  #  (yy.yy - zz.zz)
+  pe_ci = rbind(paste0(n_s, " (", sprintf("%.2f", mat[, 2]*100), ")"),
+                paste0("(", sprintf("%.2f", mat[, 3]*100), "-", sprintf("%.2f", mat[, 4]*100), ")"))
+
+  # fit the binomial regression model
+  mod = glm(myvar ~ year_group + as.factor(r_sex_b) + as.factor(r_race_4) + as.factor(pop_dens) + as.factor(schl_rgn_4) + as.factor(college_grad_b),
+            weights = sampling_weight,
+            data = dat,
+            family = binomial)
+  # get the adjusted model sample size by printing it to the console
+  print(nrow(mod[["model"]]))
+  
+  # get the point estimate and confidence interval for the OR
+  # using the stata formulation for the standard errors
+  or = sprintf("%.2f", exp(coef(mod)[["year_group"]]))
+  ci = exp(coefci(mod, vcov. = sandwich1))
+  ci_lb = sprintf("%.2f", ci[2, 1]); ci_ub = sprintf("%.2f", ci[2, 2])
+  # combine the results into two rows
+  or_ci = rbind(or,
+                paste0("(", ci_lb, "-", ci_ub, ")"))
+  return(cbind(pe_ci, or_ci))
+}
+
+choice_vars = c("any_last12m_nonmed_b", "dr_told_tk_any_b", "src_internt", "src_frnd_ask", "src_rltv_ask",
+                "src_frnd_free", "src_rltv_free", "src_frnd_bght", "src_rltv_bght", "src_prescrp", "src_dealer",
+                "src_other", "any_src_mult", "easy_gt_any1", "easy_gt_any_not1")
+
+# generate all rows and collapse into a dataframe
+results = data.frame(do.call(rbind, map(choice_vars, rowGen)))
+
+# add a measures column to the table, with a blank entry in between each one
+results = results %>%
+  mutate(Measures = c(rbind(c("", "", "  Bought on the internet", "  Took from a friend", "  Took from a relative",
+                              "  Given for free by a friend", "  Given for free by a relative", "  Bought from a friend",
+                              "  Bought from a relative", "  From a prescription I had", "  Bought from a drug dealer / stranger",
+                              "  Other", "  Multiple sources", "  Probably impossible", "  Very easy to very difficult"),
+                            rep("", 15)))) %>%
+  relocate(Measures)
+
+# calculate the total sample sizes 
+n_12_nonmed = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(any_last12m_nonmed_b))) %>% pull(n))
+n_life_med  = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(dr_told_tk_any_b))) %>% pull(n))
+n_src       = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(src_internt))) %>% pull(n))
+n_mult      = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(any_src_mult))) %>% pull(n))
+n_eas       = paste0("n = ", form_2 %>% group_by(year_group) %>% summarize(n = sum(!is.na(easy_gt_any_b))) %>% pull(n))
+
+n_12_nonmed = c("  Past-year prescription drug misuse", n_12_nonmed, "")
+n_life_med = c("  Lifetime medical prescription drug use", n_life_med, "")
+n_src = c("Diversion sources for nonmedical use", n_src, "")
+n_mult = c("Number of diversion sources", n_mult, "")
+n_eas = c("Difficulty of getting prescription drugs", n_eas, "")
+
+# add the sample sizes in between rows
+results = rbind(c("Prescription drug use", rep("", 8)),
+                n_12_nonmed, results[1:2, ],
+                n_life_med, results[3:4, ],
+                n_src,  results[5:24, ],
+                n_mult,  results[25:26, ],
+                n_eas, results[27:30, ])
+
+# add some header rows
+results = rbind(c("", rep("No. (%)", 7), "aOR"),
+                c("Measures", rep("95% CI", 8)),
+                results)
+row.names(results) = 1:nrow(results)
+
+# add the column names (year groups)
+names(results) = c("", "2009-2010", "2011-2012", "2013-2014", "2015-2016",
+                   "2017-2018", "2019-2020", "2021-2022", "Linear Trend")
+
+# save the table as a csv
+write.csv(results, "C:/Users/jjardine/Desktop/MTF/MTF_Drug_Sources/code/revise/table1_w_controls.csv", row.names = FALSE)
+```
+
+# Table 2
+
+```{r modeling2, echo = TRUE, message = FALSE, warning = FALSE, results = "asis"}
+choice_vars = c("amph_src_mult", "easy_gt_amphtmns1", "easy_gt_amphtmns_not1",
+                "trq_src_mult",  "easy_gt_tranqliz1", "easy_gt_tranqliz_not1",
+                "narc_src_mult", "easy_gt_narcotic1", "easy_gt_narcotic_not1")
+
+# generate all rows and collapse into a dataframe
+results = data.frame(do.call(rbind, map(choice_vars, rowGen)))
+
+# add a measures column to the table, with a blank entry in between each one
+results = results %>%
+  mutate(Measures = c(rbind(c("  Multiple sources", "  Probably impossible", "  Very easy to very difficult",
+                              "  Multiple sources", "  Probably impossible", "  Very easy to very difficult",
+                              "  Multiple sources", "  Probably impossible", "  Very easy to very difficult"),
+                            rep("", 9)))) %>%
+  relocate(Measures)
+
+# calculate the total sample sizes 
+n_amph_src = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(amph_src_mult))) %>% pull(n))
+n_amph_eas = paste0("n = ", form_2 %>% group_by(year_group) %>% summarize(n = sum(!is.na(easy_gt_amphtmns1))) %>% pull(n))
+n_trql_src = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(trq_src_mult))) %>% pull(n))
+n_trql_eas = paste0("n = ", form_2 %>% group_by(year_group) %>% summarize(n = sum(!is.na(easy_gt_tranqliz1))) %>% pull(n))
+n_narc_src = paste0("n = ", form_1 %>% group_by(year_group) %>% summarize(n = sum(!is.na(narc_src_mult))) %>% pull(n))
+n_narc_eas = paste0("n = ", form_2 %>% group_by(year_group) %>% summarize(n = sum(!is.na(easy_gt_narcotic1))) %>% pull(n))
+
+n_amph_src = c("Diversion sources for stimulants", n_amph_src, "")
+n_amph_eas = c("Difficulty of getting stimulants", n_amph_eas, "")
+n_trql_src = c("Diversion sources for benzodiazepines", n_trql_src, "")
+n_trql_eas = c("Difficulty of getting benzodiazepines", n_trql_eas, "")
+n_narc_src = c("Diversion sources for opioids", n_narc_src, "")
+n_narc_eas = c("Difficulty of getting opioids", n_narc_eas, "")
+
+# add the sample sizes in between rows
+results = rbind(n_amph_src, results[1:2, ],
+                n_amph_eas, results[3:6, ],
+                n_trql_src, results[7:8, ],
+                n_trql_eas, results[9:12, ],
+                n_narc_src, results[13:14, ],
+                n_narc_eas, results[15:18, ])
+
+# add some header rows
+results = rbind(c("", rep("No. (%)", 7), "aOR"),
+                c("Measures", rep("95% CI", 8)),
+                results)
+row.names(results) = 1:nrow(results)
+
+# add the column names (year groups)
+names(results) = c("", "2009-2010", "2011-2012", "2013-2014", "2015-2016",
+                   "2017-2018", "2019-2020", "2021-2022", "Linear Trend")
+
+# save the table as a csv
+write.csv(results, "C:/Users/jjardine/Desktop/MTF/MTF_Drug_Sources/code/revise/table2_w_controls.csv", row.names = FALSE)
+```
