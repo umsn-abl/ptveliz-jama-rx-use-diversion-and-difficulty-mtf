@@ -7,7 +7,7 @@ This code combines several public-use datasets (2009-2022) from the Monitoring t
 ## files
 
 [MTF_Drug_Sources.Rmd](MTF_Drug_Sources.Rmd) is an R Markdown script that performs the data munging.  
-[MTF_Drug_Sources_Models_w_Controls.Rmd](MTF_Drug_Sources_Models_w_Controls.Rmd) is an R Markdown script that performs the analysis and generation of tables summarizing the results.
+[MTF_Drug_Sources_Models_w_Controls.Rmd](MTF_Drug_Sources_Models_w_Controls.Rmd) is an R Markdown script that performs the analysis and generation of tables summarizing the results.  
 [Var_Names.csv](Var_Names.csv) is a CSV file that contains the original names of the variables used in the analysis.
 
 ## doi
